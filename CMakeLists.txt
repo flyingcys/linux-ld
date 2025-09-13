@@ -17,6 +17,79 @@ add_library(auto_init STATIC
 
 target_include_directories(auto_init PUBLIC include)
 
+# =============================================================================
+# 自动发现components目录下的子目录并添加到构建中
+# =============================================================================
+
+# 全局变量：存储所有发现的组件库名称
+set(DISCOVERED_COMPONENTS "" CACHE INTERNAL "List of discovered component libraries")
+
+# 自动添加子目录的函数
+function(auto_add_subdirectories base_dir)
+    # 参数验证
+    if(NOT EXISTS ${base_dir})
+        message(WARNING "目录不存在: ${base_dir}")
+        return()
+    endif()
+
+    message(STATUS "=== 自动发现 ${base_dir} 目录下的组件 ===")
+
+    # 获取所有子目录
+    file(GLOB subdirs RELATIVE ${base_dir} ${base_dir}/*)
+
+    # 统计变量
+    set(total_dirs 0)
+    set(added_dirs 0)
+    set(skipped_dirs 0)
+    set(component_list "")
+
+    foreach(subdir ${subdirs})
+        set(subdir_path ${base_dir}/${subdir})
+
+        # 检查是否为目录
+        if(IS_DIRECTORY ${subdir_path})
+            math(EXPR total_dirs "${total_dirs} + 1")
+
+            # 排除特殊目录
+            if(subdir MATCHES "^\\.|build|cmake-build|CMakeFiles")
+                message(STATUS "  ⊘ 跳过特殊目录: ${subdir}")
+                math(EXPR skipped_dirs "${skipped_dirs} + 1")
+                continue()
+            endif()
+
+            # 检查是否包含 CMakeLists.txt
+            if(EXISTS ${subdir_path}/CMakeLists.txt)
+                message(STATUS "  ✅ 自动添加组件: ${subdir}")
+                add_subdirectory(${subdir_path})
+                list(APPEND component_list ${subdir})
+                math(EXPR added_dirs "${added_dirs} + 1")
+            else()
+                message(STATUS "  ⚠️ 跳过目录 ${subdir}：未找到 CMakeLists.txt")
+                math(EXPR skipped_dirs "${skipped_dirs} + 1")
+            endif()
+        endif()
+    endforeach()
+
+    # 更新全局组件列表
+    set(DISCOVERED_COMPONENTS ${component_list} CACHE INTERNAL "List of discovered component libraries")
+
+    message(STATUS "=== 组件发现完成 ===")
+    message(STATUS "  总目录数: ${total_dirs}")
+    message(STATUS "  已添加: ${added_dirs}")
+    message(STATUS "  已跳过: ${skipped_dirs}")
+    if(component_list)
+        message(STATUS "  发现的组件: ${component_list}")
+    endif()
+    message(STATUS "========================")
+endfunction()
+
+# 自动添加 components 目录下的所有组件
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/components)
+    auto_add_subdirectories(${CMAKE_CURRENT_SOURCE_DIR}/components)
+else()
+    message(STATUS "components目录不存在，跳过自动组件发现")
+endif()
+
 # 设置链接选项 - 使用自定义链接器脚本（可选）
 # set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -T${CMAKE_CURRENT_SOURCE_DIR}/auto_init.ld")
 
@@ -30,6 +103,15 @@ add_executable(demo
 )
 
 target_link_libraries(demo auto_init)
+
+# 自动链接所有发现的组件库到demo程序
+# 使用--whole-archive确保包含所有符号，包括初始化函数和Shell命令
+foreach(component ${DISCOVERED_COMPONENTS})
+    if(TARGET ${component})
+        message(STATUS "链接组件库: ${component} (使用--whole-archive)")
+        target_link_libraries(demo -Wl,--whole-archive ${component} -Wl,--no-whole-archive)
+    endif()
+endforeach()
 
 # 如果需要使用自定义链接器脚本，可以取消下面的注释
 # target_link_options(demo PRIVATE -T${CMAKE_CURRENT_SOURCE_DIR}/auto_init.ld)
